@@ -1,0 +1,28 @@
+# Render Blueprint - Deploy with one click
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: telegram-file-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT2_TOKEN
+        sync: false
+      - key: BOT2_USERNAME
+        sync: false
+      - key: BIN_CHANNEL_ID
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: FORCE_SUB_CHANNEL_ID
+        sync: false
+      - key: FORCE_SUB_CHANNEL_LINK
+        sync: false
