@@ -14,6 +14,9 @@ const PORT = process.env.PORT || 3000;
 
 const OWNER_IDS = [7773543746, 8248143999];
 
+const broadcastMode = {};
+const adminChats = [];
+
 if (!BOT_TOKEN || !BOT2_TOKEN || !BIN_CHANNEL_ID || !BOT2_USERNAME || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error('Missing required environment variables!');
   console.error('Required: BOT_TOKEN, BOT2_TOKEN, BIN_CHANNEL_ID, BOT2_USERNAME, SUPABASE_URL, SUPABASE_ANON_KEY');
@@ -73,6 +76,52 @@ async function checkChannelMembership(userId) {
   }
 }
 
+async function broadcastMessage(msg, chatId) {
+  if (adminChats.length === 0) {
+    await bot1.sendMessage(chatId, 'No channels/groups found where bot is admin.\nAdd bot as admin to channels/groups first, then use /refresh to update list.');
+    return;
+  }
+
+  let success = 0, failed = 0;
+  await bot1.sendMessage(chatId, `Broadcasting to ${adminChats.length} channels/groups...`);
+
+  for (const chat of adminChats) {
+    try {
+      await bot1.copyMessage(chat.id, chatId, msg.message_id);
+      success++;
+    } catch (e) {
+      console.log(`Failed to broadcast to ${chat.id}: ${e.message}`);
+      failed++;
+    }
+  }
+
+  await bot1.sendMessage(chatId, `Broadcast complete!\nSuccess: ${success}\nFailed: ${failed}`);
+}
+
+async function refreshAdminChats() {
+  adminChats.length = 0;
+  console.log('Admin chats list cleared. Will be populated when bot receives updates from channels.');
+}
+
+bot1.on('my_chat_member', async (msg) => {
+  const chat = msg.chat;
+  const newStatus = msg.new_chat_member?.status;
+  
+  if (newStatus === 'administrator' || newStatus === 'creator') {
+    const exists = adminChats.find(c => c.id === chat.id);
+    if (!exists) {
+      adminChats.push({ id: chat.id, title: chat.title || 'Unknown', type: chat.type });
+      console.log(`Added admin chat: ${chat.title} (${chat.id})`);
+    }
+  } else if (newStatus === 'left' || newStatus === 'kicked') {
+    const index = adminChats.findIndex(c => c.id === chat.id);
+    if (index !== -1) {
+      adminChats.splice(index, 1);
+      console.log(`Removed admin chat: ${chat.title} (${chat.id})`);
+    }
+  }
+});
+
 console.log('='.repeat(50));
 console.log('Telegram File Storage Bot Started!');
 console.log('='.repeat(50));
@@ -92,18 +141,51 @@ bot1.on('message', async (msg) => {
   }
 
   if (msg.text === '/start') {
+    broadcastMode[userId] = false;
     await bot1.sendMessage(chatId, 
       'Welcome to File Storage Bot!\n\n' +
-      'Send me any file and I will:\n' +
-      '1. Save it to storage channel\n' +
-      '2. Give you a shareable link\n\n' +
-      'Supported: Videos, Photos, Documents, Audio, Voice, GIFs'
+      'Commands:\n' +
+      '/start - Normal mode (save files)\n' +
+      '/all - Broadcast mode (send to all channels)\n' +
+      '/channels - List admin channels\n' +
+      '/status - Bot status\n\n' +
+      'Send me any file to save it and get a shareable link!'
     );
     return;
   }
 
+  if (msg.text === '/all') {
+    broadcastMode[userId] = true;
+    await bot1.sendMessage(chatId, 
+      '📢 BROADCAST MODE ACTIVATED!\n\n' +
+      'Now send any message (text, photo, video, etc.) and it will be sent to ALL channels/groups where bot is admin.\n\n' +
+      'Type /start to go back to normal mode.\n' +
+      'Type /channels to see the list of channels.'
+    );
+    return;
+  }
+
+  if (msg.text === '/channels') {
+    if (adminChats.length === 0) {
+      await bot1.sendMessage(chatId, 'No channels/groups found.\n\nMake sure:\n1. Bot is added as ADMIN to channels/groups\n2. Bot has received at least one update from each channel');
+    } else {
+      let list = '📋 Admin Channels/Groups:\n\n';
+      adminChats.forEach((c, i) => {
+        list += `${i + 1}. ${c.title} (${c.type})\n`;
+      });
+      await bot1.sendMessage(chatId, list);
+    }
+    return;
+  }
+
   if (msg.text === '/status') {
-    await bot1.sendMessage(chatId, `Bot Status: Online\nStorage: ${BIN_CHANNEL_ID}\nBot 2: @${BOT2_USERNAME}`);
+    const mode = broadcastMode[userId] ? 'BROADCAST' : 'NORMAL';
+    await bot1.sendMessage(chatId, `Bot Status: Online\nMode: ${mode}\nStorage: ${BIN_CHANNEL_ID}\nBot 2: @${BOT2_USERNAME}\nAdmin Channels: ${adminChats.length}`);
+    return;
+  }
+
+  if (broadcastMode[userId]) {
+    await broadcastMessage(msg, chatId);
     return;
   }
 
@@ -117,7 +199,7 @@ bot1.on('message', async (msg) => {
   else if (msg.animation) { file = msg.animation; fileType = 'animation'; }
 
   if (!file) {
-    if (msg.text) await bot1.sendMessage(chatId, 'Please send me a file to save it.');
+    if (msg.text) await bot1.sendMessage(chatId, 'Please send me a file to save it.\n\nOr use /all for broadcast mode.');
     return;
   }
 
