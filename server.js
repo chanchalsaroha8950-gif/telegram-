@@ -15,6 +15,7 @@ const PORT = process.env.PORT || 3000;
 const OWNER_IDS = [7773543746, 8248143999];
 
 const broadcastMode = {};
+const forwardMode = {};
 let adminChats = [];
 
 if (!BOT_TOKEN || !BOT2_TOKEN || !BIN_CHANNEL_ID || !BOT2_USERNAME || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -154,7 +155,7 @@ async function refreshAdminChats() {
 bot1.on('my_chat_member', async (msg) => {
   const chat = msg.chat;
   const newStatus = msg.new_chat_member?.status;
-  
+
   if (newStatus === 'administrator' || newStatus === 'creator') {
     const exists = adminChats.find(c => c.id === chat.id);
     if (!exists) {
@@ -200,40 +201,75 @@ bot1.on('message', async (msg) => {
 
   if (msg.text === '/start') {
     broadcastMode[userId] = false;
+    forwardMode[userId] = false;
     await bot1.sendMessage(chatId, 
-      'Welcome to File Storage Bot!\n\n' +
-      'Commands:\n' +
-      '/start - Normal mode (save files)\n' +
-      '/all - Broadcast mode (send to all channels)\n' +
-      '/channels - List admin channels\n' +
-      '/addchannel <id> - Add channel manually\n' +
-      '/removechannel <id> - Remove channel\n' +
-      '/status - Bot status\n\n' +
-      'Send me any file to save it and get a shareable link!'
+      '👋 Welcome to File Storage Bot!\n\n' +
+      'Send me any file to save it and get a shareable link!\n\n' +
+      'Use /help to see all commands.'
+    );
+    return;
+  }
+
+  if (msg.text === '/help') {
+    await bot1.sendMessage(chatId, 
+      '📚 *All Commands:*\n\n' +
+      '*File Storage:*\n' +
+      '/start - Normal mode, save files\n\n' +
+      '*Broadcast:*\n' +
+      '/all - Broadcast mode ON (message sabhi channels mai jayega)\n\n' +
+      '*Channel Management:*\n' +
+      '/channels - Saved channels ki list\n' +
+      '/addchannels - Forward mode ON (forward karke channels add karo)\n' +
+      '/addchannel <id> - Manually channel add karo\n' +
+      '/removechannel <id> - Channel hatao\n\n' +
+      '*Other:*\n' +
+      '/status - Bot status dekho\n' +
+      '/help - Ye message\n\n' +
+      '💡 *Tip:* /addchannels use karo, phir channels se messages forward karo - automatically add ho jayenge!',
+      { parse_mode: 'Markdown' }
     );
     return;
   }
 
   if (msg.text === '/all') {
     broadcastMode[userId] = true;
+    forwardMode[userId] = false;
     await bot1.sendMessage(chatId, 
       '📢 BROADCAST MODE ACTIVATED!\n\n' +
-      'Now send any message (text, photo, video, etc.) and it will be sent to ALL channels/groups where bot is admin.\n\n' +
-      'Type /start to go back to normal mode.\n' +
-      'Type /channels to see the list of channels.'
+      'Ab koi bhi message bhejo (text, photo, video, etc.) - wo sabhi channels mai send ho jayega.\n\n' +
+      `/channels - ${adminChats.length} channels saved hain\n` +
+      '/start - Normal mode mai wapas jao'
+    );
+    return;
+  }
+
+  if (msg.text === '/addchannels') {
+    forwardMode[userId] = true;
+    broadcastMode[userId] = false;
+    await bot1.sendMessage(chatId, 
+      '📥 FORWARD MODE ACTIVATED!\n\n' +
+      'Ab channels se koi bhi message forward karo - wo channel automatically add ho jayega.\n\n' +
+      'Jab sab channels add ho jayein, /start type karo.\n' +
+      `/channels - ${adminChats.length} channels already saved hain`
     );
     return;
   }
 
   if (msg.text === '/channels') {
     if (adminChats.length === 0) {
-      await bot1.sendMessage(chatId, 'No channels/groups found.\n\nUse /addchannel <channel_id> to manually add a channel.\nExample: /addchannel -1001234567890');
+      await bot1.sendMessage(chatId, 
+        '📋 No channels saved yet!\n\n' +
+        '📥 /addchannels - Forward karke add karo (Easy way!)\n' +
+        '✏️ /addchannel <id> - Manually add karo'
+      );
     } else {
-      let list = '📋 Admin Channels/Groups:\n\n';
+      let list = '📋 Saved Channels/Groups:\n\n';
       adminChats.forEach((c, i) => {
-        list += `${i + 1}. ${c.title} (ID: ${c.id})\n`;
+        list += `${i + 1}. ${c.title}\n   ID: ${c.id}\n\n`;
       });
-      list += '\nUse /addchannel <id> to add more\nUse /removechannel <id> to remove';
+      list += `Total: ${adminChats.length}\n\n`;
+      list += '📥 /addchannels - Aur add karo\n';
+      list += '🗑 /removechannel <id> - Hatao';
       await bot1.sendMessage(chatId, list);
     }
     return;
@@ -250,17 +286,17 @@ bot1.on('message', async (msg) => {
       await bot1.sendMessage(chatId, 'Invalid channel ID. Use numeric ID like -1001234567890');
       return;
     }
-    
+
     try {
       const chatInfo = await bot1.getChat(channelId);
       const chatData = { id: channelId, title: chatInfo.title || 'Unknown', type: chatInfo.type };
-      
+
       const exists = adminChats.find(c => c.id === channelId);
       if (exists) {
         await bot1.sendMessage(chatId, `Channel "${chatData.title}" already in list!`);
         return;
       }
-      
+
       adminChats.push(chatData);
       await saveAdminChat(chatData);
       await bot1.sendMessage(chatId, `✅ Added: ${chatData.title} (${chatData.type})\nTotal channels: ${adminChats.length}`);
@@ -281,13 +317,13 @@ bot1.on('message', async (msg) => {
       await bot1.sendMessage(chatId, 'Invalid channel ID.');
       return;
     }
-    
+
     const index = adminChats.findIndex(c => c.id === channelId);
     if (index === -1) {
       await bot1.sendMessage(chatId, 'Channel not found in list.');
       return;
     }
-    
+
     const removed = adminChats.splice(index, 1)[0];
     await removeAdminChat(channelId);
     await bot1.sendMessage(chatId, `✅ Removed: ${removed.title}\nTotal channels: ${adminChats.length}`);
@@ -295,9 +331,51 @@ bot1.on('message', async (msg) => {
   }
 
   if (msg.text === '/status') {
-    const mode = broadcastMode[userId] ? 'BROADCAST' : 'NORMAL';
-    await bot1.sendMessage(chatId, `Bot Status: Online\nMode: ${mode}\nStorage: ${BIN_CHANNEL_ID}\nBot 2: @${BOT2_USERNAME}\nAdmin Channels: ${adminChats.length}`);
+    let mode = 'NORMAL (File Save)';
+    if (broadcastMode[userId]) mode = '📢 BROADCAST';
+    if (forwardMode[userId]) mode = '📥 FORWARD (Adding Channels)';
+    
+    await bot1.sendMessage(chatId, 
+      '🤖 *Bot Status*\n\n' +
+      `Status: ✅ Online\n` +
+      `Mode: ${mode}\n` +
+      `Saved Channels: ${adminChats.length}\n` +
+      `Storage: ${BIN_CHANNEL_ID}\n` +
+      `Bot 2: @${BOT2_USERNAME}`,
+      { parse_mode: 'Markdown' }
+    );
     return;
+  }
+
+  if (forwardMode[userId] && msg.forward_from_chat) {
+    const forwardedChat = msg.forward_from_chat;
+    if (forwardedChat.type === 'channel' || forwardedChat.type === 'supergroup') {
+      const exists = adminChats.find(c => c.id === forwardedChat.id);
+      if (exists) {
+        await bot1.sendMessage(chatId, `⚠️ "${forwardedChat.title}" already saved hai!`);
+      } else {
+        try {
+          await bot1.getChat(forwardedChat.id);
+          const chatData = { id: forwardedChat.id, title: forwardedChat.title || 'Unknown', type: forwardedChat.type };
+          adminChats.push(chatData);
+          await saveAdminChat(chatData);
+          await bot1.sendMessage(chatId, 
+            `✅ Added: ${forwardedChat.title}\n` +
+            `Type: ${forwardedChat.type}\n` +
+            `ID: ${forwardedChat.id}\n\n` +
+            `Total channels: ${adminChats.length}\n\n` +
+            'Aur forward karo ya /start se exit karo.'
+          );
+        } catch (e) {
+          await bot1.sendMessage(chatId, 
+            `❌ "${forwardedChat.title}" add nahi ho saka.\n` +
+            `Bot is channel mai admin nahi hai.\n\n` +
+            `Pehle bot ko "${forwardedChat.title}" mai admin banao, phir forward karo.`
+          );
+        }
+      }
+      return;
+    }
   }
 
   if (broadcastMode[userId]) {
