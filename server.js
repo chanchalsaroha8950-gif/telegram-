@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 const OWNER_IDS = [7773543746, 8248143999];
 
 const broadcastMode = {};
-const adminChats = [];
+let adminChats = [];
 
 if (!BOT_TOKEN || !BOT2_TOKEN || !BIN_CHANNEL_ID || !BOT2_USERNAME || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error('Missing required environment variables!');
@@ -76,6 +76,54 @@ async function checkChannelMembership(userId) {
   }
 }
 
+async function ensureAdminChatsTable() {
+  try {
+    const { error } = await supabase.from('admin_chats').select('id').limit(1);
+    if (error && error.code === '42P01') {
+      console.log('admin_chats table not found. Please create it manually in Supabase.');
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.log('Error checking admin_chats table:', err.message);
+    return false;
+  }
+}
+
+async function loadAdminChats() {
+  try {
+    const { data, error } = await supabase.from('admin_chats').select('*');
+    if (error) {
+      console.log('Error loading admin chats:', error.message);
+      return;
+    }
+    adminChats = data || [];
+    console.log(`Loaded ${adminChats.length} admin chats from database`);
+  } catch (err) {
+    console.log('Error loading admin chats:', err.message);
+  }
+}
+
+async function saveAdminChat(chat) {
+  try {
+    const { error } = await supabase
+      .from('admin_chats')
+      .upsert([{ id: chat.id, title: chat.title, type: chat.type }], { onConflict: 'id' });
+    if (error) console.log('Error saving admin chat:', error.message);
+  } catch (err) {
+    console.log('Error saving admin chat:', err.message);
+  }
+}
+
+async function removeAdminChat(chatId) {
+  try {
+    const { error } = await supabase.from('admin_chats').delete().eq('id', chatId);
+    if (error) console.log('Error removing admin chat:', error.message);
+  } catch (err) {
+    console.log('Error removing admin chat:', err.message);
+  }
+}
+
 async function broadcastMessage(msg, chatId) {
   if (adminChats.length === 0) {
     await bot1.sendMessage(chatId, 'No channels/groups found where bot is admin.\nAdd bot as admin to channels/groups first, then use /refresh to update list.');
@@ -110,17 +158,27 @@ bot1.on('my_chat_member', async (msg) => {
   if (newStatus === 'administrator' || newStatus === 'creator') {
     const exists = adminChats.find(c => c.id === chat.id);
     if (!exists) {
-      adminChats.push({ id: chat.id, title: chat.title || 'Unknown', type: chat.type });
+      const chatData = { id: chat.id, title: chat.title || 'Unknown', type: chat.type };
+      adminChats.push(chatData);
+      await saveAdminChat(chatData);
       console.log(`Added admin chat: ${chat.title} (${chat.id})`);
     }
-  } else if (newStatus === 'left' || newStatus === 'kicked') {
+  } else if (newStatus === 'left' || newStatus === 'kicked' || newStatus === 'member') {
     const index = adminChats.findIndex(c => c.id === chat.id);
     if (index !== -1) {
       adminChats.splice(index, 1);
+      await removeAdminChat(chat.id);
       console.log(`Removed admin chat: ${chat.title} (${chat.id})`);
     }
   }
 });
+
+async function initialize() {
+  await ensureAdminChatsTable();
+  await loadAdminChats();
+}
+
+initialize();
 
 console.log('='.repeat(50));
 console.log('Telegram File Storage Bot Started!');
@@ -148,6 +206,8 @@ bot1.on('message', async (msg) => {
       '/start - Normal mode (save files)\n' +
       '/all - Broadcast mode (send to all channels)\n' +
       '/channels - List admin channels\n' +
+      '/addchannel <id> - Add channel manually\n' +
+      '/removechannel <id> - Remove channel\n' +
       '/status - Bot status\n\n' +
       'Send me any file to save it and get a shareable link!'
     );
@@ -167,14 +227,70 @@ bot1.on('message', async (msg) => {
 
   if (msg.text === '/channels') {
     if (adminChats.length === 0) {
-      await bot1.sendMessage(chatId, 'No channels/groups found.\n\nMake sure:\n1. Bot is added as ADMIN to channels/groups\n2. Bot has received at least one update from each channel');
+      await bot1.sendMessage(chatId, 'No channels/groups found.\n\nUse /addchannel <channel_id> to manually add a channel.\nExample: /addchannel -1001234567890');
     } else {
       let list = '📋 Admin Channels/Groups:\n\n';
       adminChats.forEach((c, i) => {
-        list += `${i + 1}. ${c.title} (${c.type})\n`;
+        list += `${i + 1}. ${c.title} (ID: ${c.id})\n`;
       });
+      list += '\nUse /addchannel <id> to add more\nUse /removechannel <id> to remove';
       await bot1.sendMessage(chatId, list);
     }
+    return;
+  }
+
+  if (msg.text && msg.text.startsWith('/addchannel')) {
+    const parts = msg.text.split(' ');
+    if (parts.length < 2) {
+      await bot1.sendMessage(chatId, 'Usage: /addchannel <channel_id>\nExample: /addchannel -1001234567890');
+      return;
+    }
+    const channelId = parseInt(parts[1]);
+    if (isNaN(channelId)) {
+      await bot1.sendMessage(chatId, 'Invalid channel ID. Use numeric ID like -1001234567890');
+      return;
+    }
+    
+    try {
+      const chatInfo = await bot1.getChat(channelId);
+      const chatData = { id: channelId, title: chatInfo.title || 'Unknown', type: chatInfo.type };
+      
+      const exists = adminChats.find(c => c.id === channelId);
+      if (exists) {
+        await bot1.sendMessage(chatId, `Channel "${chatData.title}" already in list!`);
+        return;
+      }
+      
+      adminChats.push(chatData);
+      await saveAdminChat(chatData);
+      await bot1.sendMessage(chatId, `✅ Added: ${chatData.title} (${chatData.type})\nTotal channels: ${adminChats.length}`);
+    } catch (e) {
+      await bot1.sendMessage(chatId, `Error: ${e.message}\n\nMake sure bot is admin in that channel.`);
+    }
+    return;
+  }
+
+  if (msg.text && msg.text.startsWith('/removechannel')) {
+    const parts = msg.text.split(' ');
+    if (parts.length < 2) {
+      await bot1.sendMessage(chatId, 'Usage: /removechannel <channel_id>\nExample: /removechannel -1001234567890');
+      return;
+    }
+    const channelId = parseInt(parts[1]);
+    if (isNaN(channelId)) {
+      await bot1.sendMessage(chatId, 'Invalid channel ID.');
+      return;
+    }
+    
+    const index = adminChats.findIndex(c => c.id === channelId);
+    if (index === -1) {
+      await bot1.sendMessage(chatId, 'Channel not found in list.');
+      return;
+    }
+    
+    const removed = adminChats.splice(index, 1)[0];
+    await removeAdminChat(channelId);
+    await bot1.sendMessage(chatId, `✅ Removed: ${removed.title}\nTotal channels: ${adminChats.length}`);
     return;
   }
 
