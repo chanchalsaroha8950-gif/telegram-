@@ -486,7 +486,7 @@ bot2.on('callback_query', async (query) => {
       return;
     }
 
-    await bot2.answerCallbackQuery(query.id, { text: '✅ Verified!' });
+    await bot2.answerCallbackQuery(query.id, { text: '✅ Verifi!' });
     try { await bot2.deleteMessage(chatId, query.message.message_id); } catch (e) {}
     await sendFileToUser(chatId, linkCode);
   }
